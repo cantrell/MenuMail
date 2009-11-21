@@ -1,1 +1,5 @@
 MenuMail is a simple email notifier similar to the Gmail notifier, but it works with any IMAP account.
+
+Dependencies:
+http://code.google.com/p/as3notificationlib/
+http://code.google.com/p/as3preferenceslib/
