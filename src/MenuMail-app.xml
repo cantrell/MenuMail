@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<application xmlns="http://ns.adobe.com/air/application/2.0beta">
+
+	<id>MenuMail</id>
+	<filename>MenuMail</filename>
+	<name>MenuMail</name>
+	<version>v1</version>
+	<description>An IMAP email notifier. Written by Christian Cantrell.</description>
+
+	<!-- Copyright information. Optional -->
+	<copyright>Copyright © 2009 Adobe Systems Incorporated. All rights reserved.</copyright>
+
+	<initialWindow>
+		<content>[This value will be overwritten by Flash Builder in the output app.xml]</content>
+		<!-- <title></title> -->
+		<!-- <systemChrome></systemChrome> -->
+		<!-- <transparent></transparent> -->
+		<visible>true</visible>
+		<!-- <minimizable></minimizable> -->
+		<!-- <maximizable></maximizable> -->
+		<!-- <resizable></resizable> -->
+
+		<width>400</width>
+		<height>300</height>
+		<!-- <x></x> -->
+		<!-- <y></y> -->
+		<!-- <minSize></minSize> -->
+		<!-- <maxSize></maxSize> -->
+	</initialWindow>
+
+	<!-- <installFolder></installFolder> -->
+	<!-- <programMenuFolder></programMenuFolder> -->
+	<icon>
+		<image128x128>assets/logo_128.png</image128x128>
+	</icon>
+
+</application>

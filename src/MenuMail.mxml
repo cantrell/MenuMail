@@ -1,0 +1,416 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:WindowedApplication xmlns:mx="http://www.adobe.com/2006/mxml" layout="absolute" applicationComplete="onApplicationComplete();">
+	<mx:Script>
+		<![CDATA[
+			import com.adobe.air.notification.AbstractNotification;
+			import com.adobe.air.notification.Notification;
+			import com.adobe.air.notification.Purr;
+			import com.adobe.air.preferences.Preference;
+			
+			import flash.display.BitmapData;
+			import flash.display.NativeMenuItem;
+			import flash.display.Sprite;
+			import flash.events.Event;
+			import flash.events.IOErrorEvent;
+			import flash.events.MouseEvent;
+			import flash.events.ProgressEvent;
+			import flash.events.TimerEvent;
+			import flash.net.SecureSocket;
+			import flash.net.Socket;
+			import flash.text.engine.ElementFormat;
+			import flash.text.engine.FontDescription;
+			import flash.text.engine.TextBlock;
+			import flash.text.engine.TextElement;
+			import flash.text.engine.TextLine;
+			import flash.utils.ByteArray;
+			import flash.utils.Timer;
+			
+			import mx.controls.Alert;
+			import mx.managers.CursorManager;
+
+			private static const CRLF:String = "\r\n";
+
+			private static const CONNECT_TAG:String      = "*";
+			private static const CAPABILITY_TAG:String   = "A001";
+			private static const LOGIN_TAG:String        = "A002";
+			private static const COMMAND_TAG:String      = "A003";
+			private static const SELECT_TAG:String       = "A004";
+			private static const EXAMINE_TAG:String      = "A005";
+			private static const STATUS_TAG:String       = "A006";
+			private static const SEARCH_TAG:String       = "A007";
+			private static const FETCH_TAG:String        = "A008";
+			
+			private var tag:String;
+			private var doneRegExp:RegExp;
+
+			private var username:String;
+			private var password:String;
+			private var imapServer:String;
+			private var portNumber:Number;
+			private var secure:Boolean;
+			
+			private var socket:Socket;
+			private var buffer:ByteArray;
+			private var purr:Purr;
+			private var timer:Timer;
+			private var unseenMessageIds:Array;
+			private var prefs:Preference;
+
+			[Embed(source="assets/dynamic_logo_128.png")]
+			private var appIconClass:Class;
+			private var appIcon:Bitmap;
+
+			private function onApplicationComplete():void
+			{
+				this.prefs = new Preference();
+				this.prefs.load();
+				var username:String = prefs.getValue("username");
+				var password:String = prefs.getValue("password");
+				var imapServer:String = prefs.getValue("imapServer");
+				var portNumberString:String = prefs.getValue("portNumber");
+				var secure:Boolean = Boolean(prefs.getValue("secure"));
+				if (username != null) this.usernameInput.text = username;
+				if (password != null) this.passwordInput.text = password;
+				if (imapServer != null) this.imapServerInput.text = imapServer;
+				if (portNumberString != null) this.portNumberInput.text = portNumberString;
+				this.secureCheckBox.selected = secure;
+				this.nativeWindow.addEventListener(Event.CLOSING, onClosing);
+				this.purr = new Purr(15);
+				this.appIcon = new appIconClass();
+				this.buffer = new ByteArray();
+				this.timer = new Timer(5*60*1000); // 5 minutes
+				this.timer.addEventListener(TimerEvent.TIMER, start);
+				this.timer.start();
+			}
+
+			private function onClosing(e:Event):void
+			{
+				e.preventDefault();
+				this.stop();
+				this.purr.clear(AbstractNotification.TOP_RIGHT);
+				for (var i:int = NativeApplication.nativeApplication.openedWindows.length - 1; i >= 0; --i)
+				{
+					NativeWindow(NativeApplication.nativeApplication.openedWindows[i]).close();
+				}
+			}
+			
+			private function start(e:TimerEvent = null):void
+			{
+				this.tag = CONNECT_TAG;
+				this.doneRegExp = new RegExp("\\" + tag + ".+\\r\\n");
+				this.stop();
+				CursorManager.setBusyCursor();
+				this.socket = (this.secure) ? new SecureSocket() : new Socket();
+				this.socket.addEventListener(Event.CONNECT, onConnect);
+				this.socket.addEventListener(IOErrorEvent.IO_ERROR, onIOError);
+				this.socket.addEventListener(Event.CLOSE, onClose);
+				this.socket.addEventListener(ProgressEvent.SOCKET_DATA, onSocketData);
+				this.socket.connect(this.imapServer, this.portNumber);
+			}
+			
+			public function stop():void
+			{
+				CursorManager.removeBusyCursor();
+				if (this.socket != null && this.socket.connected)
+				{
+					this.socket.close();
+					this.socket = null;
+				}
+			}
+			
+			private function onSave():void
+			{
+				if (this.usernameInput.text.length == 0 ||
+					this.passwordInput.text.length == 0 ||
+					this.imapServerInput.text.length == 0 ||
+					this.portNumberInput.text.length == 0)
+				{
+					Alert.show("All information is required.", "Missing Information");
+					return;
+				}
+				this.username = this.usernameInput.text;
+				this.password = this.passwordInput.text;
+				this.imapServer = this.imapServerInput.text;
+				this.portNumber = Number(this.portNumberInput.text);
+				this.secure = this.secureCheckBox.selected;
+				this.prefs.setValue("username", this.username, true);
+				this.prefs.setValue("password", this.password, true);
+				this.prefs.setValue("imapServer", this.imapServer, false);
+				this.prefs.setValue("portNumber", this.portNumber, false);
+				this.prefs.setValue("secure", this.secure, false);
+				this.prefs.save();
+				this.unseenMessageIds = new Array();
+				this.start();
+				this.checkNowButton.enabled = true;
+			}
+			
+			private function onCheckNow():void
+			{
+				this.start();
+				this.timer.reset();
+			}
+			
+			private function onConnect(e:Event):void
+			{
+			}
+			
+			private function onIOError(e:IOErrorEvent):void
+			{
+				this.onConnectError();
+			}
+			
+			private function onClose(e:Event):void
+			{
+				CursorManager.removeBusyCursor();
+			}
+			
+			private function onConnectError():void
+			{
+				CursorManager.removeBusyCursor();
+				Alert.show("Your configuration is incorrect.", "Login Error");
+				this.stop();
+				this.checkNowButton.enabled = false;
+			}
+			
+			private function onSocketData(e:ProgressEvent):void
+			{
+				var s:Socket = e.target as Socket;
+				s.readBytes(this.buffer, this.buffer.length, s.bytesAvailable);
+				var bufferString:String = buffer.toString();
+				if (bufferString.search(this.doneRegExp) != -1)
+				{
+					this.onResponse();
+				}
+			}
+			
+			private function onResponse():void
+			{
+				var bufferString:String = this.buffer.toString();
+				this.buffer.clear();
+				if (this.tag == CONNECT_TAG)
+				{
+					this.setTag(LOGIN_TAG);
+					this.socket.writeUTFBytes(LOGIN_TAG + " LOGIN " + this.username + " " + this.password + CRLF);
+					this.socket.flush();
+				}
+				else if (this.tag == LOGIN_TAG)
+				{
+					if (bufferString.indexOf(LOGIN_TAG + " OK") != -1) // Successful login
+					{
+						this.getStatus(bufferString);
+					}
+					else
+					{
+						this.onConnectError();
+					}
+				}
+				else if (this.tag == STATUS_TAG)
+				{
+					this.onGetStatus(bufferString);
+				}
+				else if (this.tag == SELECT_TAG)
+				{
+					this.getUnseenMessageNumbers();
+				}
+				else if (this.tag == SEARCH_TAG)
+				{
+					this.onGetUnseenMessageNumbers(bufferString);
+				}
+				else if (this.tag == FETCH_TAG)
+				{
+					this.onFetchUnseenSubjects(bufferString);
+				}
+			}
+			
+			private function getStatus(bufferString:String):void
+			{
+				this.setTag(STATUS_TAG);
+				this.socket.writeUTFBytes(STATUS_TAG + " STATUS inbox (MESSAGES UNSEEN)" + CRLF);
+				this.socket.flush();
+			}
+			
+			private function onGetStatus(bufferString:String):void
+			{
+				var statusData:String = bufferString.substring(bufferString.indexOf("(")+1, bufferString.indexOf(")"));
+				var dataArray:Array = statusData.split(" ");
+				var messages:Number = 0;
+				var unseen:Number = 0;
+				for (var i:uint = 0; i < dataArray.length; ++i)
+				{
+					if (dataArray[i] == "MESSAGES")
+					{
+						messages = Number(dataArray[i+1]);
+						continue;
+					}
+					if (dataArray[i] == "UNSEEN")
+					{
+						unseen = Number(dataArray[i+1]);
+						continue;
+					}
+				}
+				this.selectInbox();
+			}
+
+			private function selectInbox():void
+			{
+				this.setTag(SELECT_TAG);
+				this.socket.writeUTFBytes(SELECT_TAG + " SELECT inbox" + CRLF);
+				this.socket.flush();
+			}
+			
+			private function getUnseenMessageNumbers():void
+			{
+				this.setTag(SEARCH_TAG);
+				this.socket.writeUTFBytes(SEARCH_TAG + " SEARCH UNSEEN" + CRLF);
+				this.socket.flush();
+			}
+			
+			private function onGetUnseenMessageNumbers(bufferString:String):void
+			{
+				var messageNumberString:String = bufferString.substring(bufferString.indexOf("SEARCH") + 7, bufferString.indexOf(CRLF));
+				this.fetchUnseenSubjects(messageNumberString);
+			}
+
+			private function fetchUnseenSubjects(messageNumberString:String):void
+			{
+				this.setTag(FETCH_TAG);
+				messageNumberString = messageNumberString.replace(/[ ]/g, ",");
+				this.socket.writeUTFBytes(FETCH_TAG + " FETCH " + messageNumberString + " (FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT)])" + CRLF);
+				this.socket.flush();
+			}
+			
+			private function onFetchUnseenSubjects(bufferString:String):void
+			{
+				this.stop();
+				var unseenMessageData:Array = this.parseMessages(bufferString);
+				this.updateAppIcon(unseenMessageData.length);
+				var uniqueUnseenMessages:Array = new Array();
+				var newUnseenMessageIds:Array = new Array();
+				var menu:NativeMenu = new NativeMenu();
+				for each (var o:Object in unseenMessageData)
+				{
+					var menuItem:NativeMenuItem = new NativeMenuItem(o.from + " - " + o.subject);
+					menuItem.data = o.id;
+					menu.addItem(menuItem);
+					if (this.unseenMessageIds.indexOf(o.id) == -1)
+					{
+						uniqueUnseenMessages.push(o);
+					}
+					newUnseenMessageIds.push(o.id);
+				}
+				purr.setMenu(menu);
+				this.unseenMessageIds = newUnseenMessageIds;
+				if (uniqueUnseenMessages.length > 0) this.startNotifications(uniqueUnseenMessages);
+			}
+			
+			private function startNotifications(unseenMessageData:Array):void
+			{
+				for each (var message:Object in unseenMessageData)
+				{
+					var notification:Notification = new Notification(message.from, message.subject, null, 3, this.appIcon);
+					notification.width = 250;
+					this.purr.addNotification(notification);
+				}
+			}
+			
+			private function parseMessages(bufferString:String):Array
+			{
+				var rawMessages:Array = bufferString.split(CRLF+CRLF+")"+CRLF);
+				rawMessages.pop();
+				var messageData:Array = new Array();
+				for each (var rawMessage:String in rawMessages)
+				{
+					var messageParts:Array = rawMessage.split(CRLF);
+					var id:Number = NaN;
+					var from:String = null;
+					var subject:String = null;
+					for each (var messagePart:String in messageParts)
+					{
+						if (messagePart.search(/^\*/) != -1)
+						{
+							id = Number(messagePart.substring(2, rawMessage.indexOf("FETCH")));
+						}
+						else if (messagePart.search(/^From:/) != -1)
+						{
+							from = messagePart.substr(6, messagePart.length);
+							from = from.replace(/ <.+>/, "");
+							from = from.replace(/\"/g, "");
+						}
+						else if (messagePart.search(/^Subject:/) != -1)
+						{
+							subject = messagePart.substr(9, messagePart.length);
+						}
+					}
+					if (!isNaN(id) && from != null && subject != null)
+					{
+						messageData.push({"id":id,"from":from,"subject":subject});
+					}
+				}
+				return messageData;
+			}
+			
+			private function updateAppIcon(count:Number):void
+			{
+				var unreadCountSprite:Sprite = new Sprite();
+				unreadCountSprite.width = 128;
+				unreadCountSprite.height = 128;
+				unreadCountSprite.x = 0;
+				unreadCountSprite.y = 0;
+				var padding:uint = 10;
+				var fontDesc:FontDescription = new FontDescription("Arial", "bold");
+				var elementFormat:ElementFormat = new ElementFormat(fontDesc, 30, 0xFFFFFF);
+				var textElement:TextElement = new TextElement(String(count), elementFormat);
+				var textBlock:TextBlock = new TextBlock(textElement);
+				var textLine:TextLine = textBlock.createTextLine();
+				textLine.x = (((128 - textLine.textWidth) - padding) + 2);
+				textLine.y = 30;
+				unreadCountSprite.graphics.beginFill(0xAA0000);
+				unreadCountSprite.graphics.drawEllipse((((128 - textLine.textWidth) - padding) - 3), 0, textLine.textWidth + padding, textLine.textHeight + padding);
+				unreadCountSprite.graphics.endFill();
+				unreadCountSprite.addChild(textLine);
+				var unreadCountData:BitmapData = new BitmapData(128, 128, true, 0x00000000);
+				unreadCountData.draw(unreadCountSprite);
+				var appData:BitmapData = new appIconClass().bitmapData;
+				appData.copyPixels(unreadCountData,
+					new Rectangle(0, 0, unreadCountData.width, unreadCountData.height),
+					new Point(0, 0),
+					null, null, true);
+				var appIcon:Bitmap = new Bitmap(appData);
+				this.purr.setIcons([appIcon]);
+			}
+			
+			private function setTag(tag:String):void
+			{
+				this.tag = tag;
+				this.doneRegExp = new RegExp(tag + ".+\\r\\n");
+			}
+
+		]]>
+	</mx:Script>
+	<mx:Box width="100%" height="100%" verticalAlign="middle" horizontalAlign="center">
+		<mx:Text width="300">
+			<mx:text>To receive email notifications, enter your IMAP configuration below.</mx:text>
+		</mx:Text>
+		<mx:Form>
+			<mx:FormItem label="Username">
+				<mx:TextInput id="usernameInput" width="200"/>
+			</mx:FormItem>
+			<mx:FormItem label="Password">
+				<mx:TextInput id="passwordInput" width="200" displayAsPassword="true"/>
+			</mx:FormItem>
+			<mx:FormItem label="IMAP Server">
+				<mx:TextInput id="imapServerInput" width="200"/>
+			</mx:FormItem>
+			<mx:FormItem label="Port Number">
+				<mx:TextInput id="portNumberInput" width="50"/>
+			</mx:FormItem>
+			<mx:FormItem label="Secure?">
+				<mx:CheckBox id="secureCheckBox"/>
+			</mx:FormItem>
+		</mx:Form>
+		<mx:HBox width="100%" horizontalAlign="center">
+			<mx:Button id="startButton" label="Start" click="onSave();"/>
+			<mx:Button id="checkNowButton" label="Check Now" click="onCheckNow();" enabled="false"/>
+		</mx:HBox>
+	</mx:Box>
+</mx:WindowedApplication>
