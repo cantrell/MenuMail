@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
-<application xmlns="http://ns.adobe.com/air/application/2.0beta2">
+<application xmlns="http://ns.adobe.com/air/application/2.0">
 
 	<id>MenuMail</id>
 	<filename>MenuMail</filename>
 	<name>MenuMail</name>
-	<version>v1</version>
+	<version>1</version>
 	<description>An IMAP email notifier. Written by Christian Cantrell.</description>
 
 	<!-- Copyright information. Optional -->
